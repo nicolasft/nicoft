@@ -11,7 +11,7 @@
 //       Adjust settings in settings.json5 and read the rest of this readme.
 // **********************************************************************************
 // NeDB is Node Embedded Database - a persistent database for Node.js, with no dependency
-// Specs and documentation at: https://github.com/louischatriot/nedb
+// Specs and documentation at: https://github.com/louischatriot/nedb 
 //
 // Under the hood, NeDB's persistence uses an append-only format, meaning that all updates
 // and deletes actually result in lines added at the end of the datafile. The reason for
@@ -25,8 +25,11 @@
 // ********************************************************************************************
 // IMPORTANT details about NeDB:
 // _id field is special - if not used it is automatically added and used as unique index
-//                      - we can set that field when inserting to use it as an automatic unique index for fast lookups of nodes (by node Id)
+//                     - we can set that field when inserting to use it as an automatic unique index for fast lookups of nodes (by node Id)
 // ********************************************************************************************
+
+//python shell se encarga de crear una conexion tipo socket.io pero con el python script
+var PythonShell = require('python-shell');						//https://github.com/extrabacon/python-shell
 var nconf = require('nconf');                                   //https://github.com/indexzero/nconf
 var JSON5 = require('json5');                                   //https://github.com/aseemk/json5
 var path = require('path');
@@ -101,6 +104,7 @@ global.sendMessageToNode = function(node) {
   {
     serial.write(node.nodeId + ':' + node.action + '\n', function () { serial.drain(); });
     console.log('NODEACTION: ' + JSON.stringify(node));
+    console.log("Envia: "+node.nodeId + ':' + node.action + '\n');
   }
   else if (node.action)
   {
@@ -169,6 +173,7 @@ io.sockets.on('connection', function (socket) {
       if (entries.length == 1)
       {
         var dbNode = entries[0];
+        socket.emit('LOG', 'del gateway '+node.type);
         dbNode.type = node.type||undefined;
         dbNode.label = node.label||undefined;
         dbNode.descr = node.descr||undefined;
@@ -229,8 +234,30 @@ io.sockets.on('connection', function (socket) {
   });
 
   socket.on('DELETENODE', function (nodeId) {
+	  
     db.remove({ _id : nodeId }, function (err, removedCount) {
       console.log('DELETED entries: ' + removedCount);
+      
+      var options = {
+    		  mode: 'text',
+    		  args: [nodeId]
+    		}
+  	  
+  	PythonShell.run('/home/pi/gateway/pythonFolder/eliminar.py', options, function (err, results) {
+  	  if (err) throw err;
+  	  console.log(err);
+  	  console.log(results);
+  	});
+      
+      //var shell = new PythonShell('procBase.py', { mode: 'txt'});
+  		//shell.send({ command: "eliminar", args:[nodeId]});
+  		//shell.on('message', function (message) {
+  			//console.log(message);
+  			//posicion=message.toInt();
+  		//});
+  		//shell.end(function (err){
+  			//if (err) throw err;
+  		//});
       db.find({ _id : { $exists: true } }, function (err, entries) {
         io.sockets.emit('UPDATENODES', entries);
       });
@@ -276,7 +303,58 @@ io.sockets.on('connection', function (socket) {
   socket.on('NODEMESSAGE', function (msg) {
     sendMessageToNode(msg);
   });
+  
+  //metodo para escuchar cuando el usuario ingresa un nuevo nombre y llama el script de python
+  socket.on('CAMBIARNOMBRE', function (Nombre) {
+	  	  console.log('inicia creacion de archivo');
+	      socket.emit('LOG', 'inicia creaci�n de archivo de configuracion para: ' + Nombre);
+	  	var resultado ="";
+	  	var options = {
+	    		  mode: 'text',
+	    		  args: [Nombre]
+	    		}
+	  	  
+	  	PythonShell.run('/home/pi/gateway/test.py', options, function (err, results) {
+	  	  if (err) throw err;
+	  	  console.log(err);
+	  	  resultado = results;
+	  	});
+	  	
+	  	    console.log(resultado.indexOf("existe"));
+	  		console.log(resultado);
+	  	  if(resultado.indexOf("existe") > -1)
+	  		  {
+	  		  	socket.emit('LOG', results+" parece que existe");
+	  	  		socket.emit('EXISTENTE');
+	  		  }
+	  	  else
+	  		  {
+	  		socket.emit('LOG', 'no existe nombre, inicia creacion de tunel');
+	  		socket.emit('CREADO');
+		  	 
+	  		PythonShell.run('/home/pi/gateway/creador.py', options, function (erroo, results) {
+	  	  	  if (erroo) throw erroo;
+	  	  	  console.log(erroo);
+	  		     });
+	  		  }	  	
+	  	console.log("los resultados de la ejecucion son: " + results);
+	  }); 
 
+  socket.on('CAMBIARLOGIN', function ( login , pass ) {
+  	  console.log('inicia creacion de login')
+      socket.emit('LOG', 'inicia creaci�n de archivo de configuracion para: ' + login + ' con pass: ******');
+  	var options = {
+  		  mode: 'text',
+  		  args: [login, pass]
+  		};
+  	  
+  	PythonShell.run('/home/pi/gateway/log.py', options, function (err, results) {
+  	  if (err) throw err;
+  	socket.emit('LOG', 'login y contrasena cambiados');
+  	console.log("Se cambio el login y contrasena "+results); 
+  	});
+  });
+  
   socket.on('GATEWAYMESSAGE', function (msg) {
     sendMessageToGateway(msg);
   });
@@ -358,40 +436,155 @@ io.sockets.on('connection', function (socket) {
 
 global.msgHistory = new Array();
 global.processSerialData = function (data) {
-  var regexMaster = /\[(\d+)\]([^\[\]\n]+)(?:\[(?:RSSI|SS)\:-?(\d+)\])?.*/gi; //modifiers: g:global i:caseinsensitive
+  //con la siguiente instrucci�n se crea un regex que recibe [id]textoenviado[rssi|ss:intensidadse�al]
+  //var regexMaster = /\[(\d+)\]([^\[\]\n]+)(?:\[(?:RSSI|SS)\:-?(\d+)\])?.*/gi; //modifiers: g:global i:caseinsensitive
+  var regexMaster = /\[(\d+)\] iD\:(\w{3})([^\[\]\n]+)(?:\[(?:RSSI|SS)\:-?(\d+)\])?.*/gi; //modifiers: g:global i:caseinsensitive
+  
+  //la siguiente opera la pregunta en los datos de entrada y los guarda en grupos
+  //por referencia, cada grupo inicia con un ( y termina en un )
+  //sin embargo en este caso el primer grupo el par�ntesis s�lo recoge los n�meros (d+)
+  //en este caso el primer grupo es [id]
+  //segundo grupo: textoenviado
+  //tercer grupo : RSSI|SS:intensidad
   var match = regexMaster.exec(data);
   console.log('>: ' + data)
-
+  //esta pregunta hace que cualquier mensaje que no tenga ese formato de datos se guarda en una base de datos diferente
+  //en este caso: db_unmatched
   if (match != null)
-  {
-    var msgTokens = match[2];
+  { 
+	//esta variable guarda el texto dentro de "textoenviado" (toma el segundo grupo)
+    var msgTokens = match[3];
+    //esta variable recibe el id del nodo (toma el primer grupo)
     var id = parseInt(match[1]); //get ID of node
-    var rssi = match[3] != undefined ? parseInt(match[3]) : undefined; //get rssi (signal strength)
+    //esta variable guarda la intensidad de la se�al
+    var rssi = match[4] != undefined ? parseInt(match[4]) : undefined; //get rssi (signal strength)
+    //esta variable guarda el tipo de nodo
+    var tipo = match[2];
+    // esta variable se encarga de traducir el mensaje del nodo a las m�tricas 
+    var tipoBien;
+    
+    //INICIA LA CREACI�N AUTOMATICA DE ID!
+    substring = "LOGIN";
+    posicion=2;
+    if(msgTokens.indexOf(substring) > -1)
+    	{
+    		//inicia registro en base de datos casual 
+    	
+    	//Nuevo
+    	var options = {
+	    		  mode: 'text',
+	    		  //args: [Nombre]
+	    		}
+	  	  
+	  	PythonShell.run('/home/pi/gateway/pythonFolder/ultimo.py', options, function (err, results) {
+	  	  if (err) throw err;
+	  	  console.log(err);
+	  	  posicion = results;
+	  	  console.log("entro al python y resulto la posicion: "+results);
+	  	});
+    	
+    	
+    	//var shell = new PythonShell('procBase.py', { mode: 'txt'});
+    	
+    	//shell.send({ command: "ultimo"});
+    	//shell.on('message', function (message) { 
+    		//console.log(message);
+    		//posicion=message.toInt();
+    	//});
+    	//shell.end(function (err){
+    		//if (err) throw err;
+    	//});
+    	console.log("paso por el python");
+    		//Inicia la b�squeda en la base de datos 
+    		//por alguna razon no para y sigue hasta el final
+    			db.findOne({ _id : posicion }, function (err, entries) {
+    				//console.log(i);
+    				if (entries==null)
+    			      { 
+                         serial.write(id + ':' + posicion + '\n', function () { serial.drain(); });
+    		             console.log("Envia: "+id + ':NEWID' + posicion);
+    			      }
+    				
+    			});
+    	}
+    substring = "IDCAMBIADO";
+    if(msgTokens.indexOf(substring) > -1)
+    	{
+    		//Inicia el registro en base de datos
+    		//Registrarlo en la base de datos
+    		//var shell = new PythonShell('script.py', { mode: 'json '});
+    		//shell.send({ command: "do_stuff", args: [1, 2, 3] });
+    		//pyshell.end(function (err) {
+    		//	  if (err) throw err;
+    		//	  console.log('terminado');
+    		//	});
+    	}
+    //Termina la Asignaci�n de ID
+    
+    var definiciones = metricsDef.motes;
+    for(var motes in definiciones)
+     {
+    	var traduccion;
+    	//traducci�n
+    	if (tipo=='TEM') 
+    		traduccion='Temperatura'; 
+    	else if(tipo=='PYV') 
+    		traduccion='Puertas'; 
+    	else if(tipo=='GAS') 
+    		traduccion='Gas'; 
+    	else if (tipo=='MOV')
+    		traduccion='Movimiento';
+    	else
+    		traduccion='undefined';
+    	
+    	if(traduccion==(definiciones[motes].label))
+    		{
+    		 tipoBien=definiciones[motes].label;
+    		 console.log('ENCONTRADO EL TIPO ES: '+tipoBien);
+    		}
+     }
+    
 
+    //esta funcion .find se encarga de buscar lineas en la base de datos que correspondan con el id encontrado
+    //la funcion retorna ya sea un mensaje de error, un texto vacio si no encuentra nada o un texto completo al encontrar alguno
     db.find({ _id : id }, function (err, entries) {
+      //primero crea un objeto que tendr� toda la informaci�n a guardar
       var existingNode = new Object();
+      //crea un boolean si el nodo encontrado tiene alguna m�trica
       var hasMatchedMetrics = false;
+      //comprueba si la funci�n encontr� algun nodo existente
       if (entries.length == 1)
       { //update
+    	//asigna el texto completo existente del nodo a la variable creada previamente
         existingNode = entries[0];
       }
 
       //check for duplicate messages - this can happen when the remote node sends an ACK-ed message but does not get the ACK so it resends same message repeatedly until it receives an ACK
       if (existingNode.updated != undefined && ((new Date) - new Date(existingNode.updated).getTime()) < 500 && msgHistory[id] == msgTokens)
       { console.log("   DUPLICATE, skipping..."); return; }
-
+      
+      //variable que guarda el "textoenviado"
       msgHistory[id] = msgTokens;
 
       //console.log('FOUND ENTRY TO UPDATE: ' + JSON.stringify(existingNode));
+      //asigna el id encontrado al objeto creado
       existingNode._id = id;
+      //asigna la se�al encontrada al nuevo objeto
       existingNode.rssi = rssi; //update signal strength we last heard from this node, regardless of any matches
+      //asigna la hora de actualizaci�n al nuevo objeto
       existingNode.updated = new Date().getTime(); //update timestamp we last heard from this node, regardless of any matches
+      //asigna el tipo al nodo
+      existingNode.type = tipoBien;
+      //comprueba si el objeto creado ya tiene alguna metrica, si no, crea un objeto que contenga las metricas
       if (existingNode.metrics == undefined)
         existingNode.metrics = new Object();
+      //comprueba si el objeto creado ya tiene algun evento, si no, crea un objeto que contenga los eventos
       if (existingNode.events == undefined)
         existingNode.events = new Object();
-
+      
+      //expresion que recibe todos los caracteres (b�sicamente se usa para crear los grupos)
       var regexpTokens = /[\w\:\.\$\!\\\'\"\?\[\]\-\(\)@%^&#+\/<>*~=,|]+/ig; //match (almost) any non space human readable character
+      //con este loop primero se crea una variable match que contiene los grupos creados al ejecutar la linea anterior
       while (match = regexpTokens.exec(msgTokens)) //extract each token/value pair from the message and process it
       {
         // //V/VBAT/VOLTS is special, applies to whole node so save it as a node level metric instead of in the node metric collection
@@ -401,26 +594,40 @@ global.processSerialData = function (data) {
           // existingNode.V = tokenMatch[1] || tokenMatch[0]; //extract the voltage part
           // continue;
         // }
-
+    	  //console.log(match);
+    	//crea una variable que va a seer usada mas adelante para guardar la metrica encontrada
         var matchingMetric;
         //try to match a metric definition
+        //hace un ciclo entre todas las definiciones del archivo metrics, y genera una variable metrics
         for(var metric in metricsDef.metrics)
         {
+        	//prueba si la metrica de metric es v�lida para el texto completo "textoenviado"
           if (metricsDef.metrics[metric].regexp.test(match[0]))
           {
             //found matching metric, add/update the node with it
             //console.log('TOKEN MATCHED: ' + metricsDef.metrics[metric].regexp);
+        	//Al encontrar una m�trica que coincida con las de metrics, ejecuta la prueba regexp a todo el "texto enviado"  
+        	//importante aqui: cuando se usa match[0] se coge todo el texto, no solo los grupos
             var tokenMatch = metricsDef.metrics[metric].regexp.exec(match[0]);
+            //guarda la metrica encontrada en una variable
             matchingMetric = metricsDef.metrics[metric];
+            //prueba si el objeto creado ya tiene un nombre, si no crea un objeto que lo contenga
+            //tener en cuenta que el objeto "existingNode.metrics[matchingmetric.name]" es el que tiene todas las
+            //propiedades "label" "descr" Value" etx, por tanto si no existe un objeto que contenga estas propiedades
+            //se debe crear uno para deguir adelante
+            //de ahi en adelante toma cada propiedad y la agrega al objeto
             if (existingNode.metrics[matchingMetric.name] == null) existingNode.metrics[matchingMetric.name] = new Object();
             existingNode.metrics[matchingMetric.name].label = existingNode.metrics[matchingMetric.name].label || matchingMetric.name;
             existingNode.metrics[matchingMetric.name].descr = existingNode.metrics[matchingMetric.name].descr || matchingMetric.descr || undefined;
+            //esta linea es importante pues determina el valor de un objeto
+            //la linea llama el m�todo determineValue: ver texto en metrics.js para ver como lo hace
             existingNode.metrics[matchingMetric.name].value = metricsDef.determineValue(matchingMetric, tokenMatch);
             existingNode.metrics[matchingMetric.name].unit = matchingMetric.unit || undefined;
             existingNode.metrics[matchingMetric.name].updated = existingNode.updated;
             existingNode.metrics[matchingMetric.name].pin = existingNode.metrics[matchingMetric.name].pin != undefined ? existingNode.metrics[matchingMetric.name].pin : matchingMetric.pin;
             existingNode.metrics[matchingMetric.name].graph = existingNode.metrics[matchingMetric.name].graph != undefined ? existingNode.metrics[matchingMetric.name].graph : matchingMetric.graph;
-
+            //existingNode.metrics[matchingMetric.name].type = tipoBien;
+            //console.log('Comprobando: '+existingNode.metrics[matchingMetric.name].type);
             //log data for graphing purposes, keep labels as short as possible since this log will grow indefinitely and is not compacted like the node database
             if (existingNode.metrics[matchingMetric.name].graph==1)
             {
@@ -439,7 +646,7 @@ global.processSerialData = function (data) {
 
             //console.log('TOKEN MATCHED OBJ:' + JSON.stringify(existingNode));
             hasMatchedMetrics = true;
-            break; //--> this stops matching as soon as 1 metric definition regex is matched on the data. You could keep trying to match more definitions and that would create multiple metrics from the same data token, but generally this is not desired behavior.
+            //break; //--> this stops matching as soon as 1 metric definition regex is matched on the data. You could keep trying to match more definitions and that would create multiple metrics from the same data token, but generally this is not desired behavior.
           }
         }
       }
@@ -455,6 +662,27 @@ global.processSerialData = function (data) {
           if (settings.general.genNodeIfNoMatch.value == true || settings.general.genNodeIfNoMatch.value == 'true' || hasMatchedMetrics)
           {
             db.insert(entry);
+            //abrir el python
+          //Inicia el registro en base de datos
+    		//Registrarlo en la base de datos
+    		//var shell = new PythonShell('procBase.py', { mode: 'txt'});
+    		//shell.send({ command: "agregar", args: [id] });
+    		//shell.end(function (err) {
+    			  //if (err) throw err;
+    			  //console.log('terminado');
+    			//});
+            
+            var options = {
+  	    		  mode: 'text',
+  	    		  args: [id]
+  	    		}
+  	  	  
+  	  	PythonShell.run('/home/pi/gateway/pythonFolder/agregar.py', options, function (err, results) {
+  	  	  if (err) throw err;
+  	  	  console.log(err);
+  	  	  console.log(results);
+  	  	});
+            
             console.log('   ['+id+'] DB-Insert new _id:' + id);
           }
           else
